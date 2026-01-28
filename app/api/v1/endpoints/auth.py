@@ -21,11 +21,11 @@ def login_access_token(
     """
     OAuth2 compatible token login, get an access token for future requests.
     """
-    # 1. Find user by email (OAuth2 field 'username' is used for email here)
+
     query = select(User).where(User.email == form_data.username)
     user = db.execute(query).scalar_one_or_none()
 
-    # 2. Verify user existence and password
+
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -38,7 +38,7 @@ def login_access_token(
             detail="Inactive user"
         )
 
-    # 3. Create access token
+
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     return {
         "access_token": create_access_token(
