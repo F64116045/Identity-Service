@@ -7,7 +7,7 @@ from app.models.user import User
 from app.schemas.user import UserCreate, UserOut
 from app.core.security import get_password_hash
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
-
+from app.api.deps import get_current_user
 router = APIRouter()
 
 @router.post("/", response_model=UserOut, status_code=status.HTTP_201_CREATED)
@@ -52,3 +52,13 @@ def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
         )
 
     return db_user
+
+
+@router.get("/me", response_model=UserOut)
+def read_user_me(
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get current logged in user information.
+    """
+    return current_user
