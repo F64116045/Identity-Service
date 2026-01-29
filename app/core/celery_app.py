@@ -4,8 +4,8 @@ from app.core.config import settings
 
 celery_app = Celery(
     "worker",
-    broker=f"redis://{settings.POSTGRES_SERVER}:6379/0",
-    backend=f"redis://{settings.POSTGRES_SERVER}:6379/0",
+    broker=f"redis://{settings.REDIS_HOST}:6379/0",
+    backend=f"redis://{settings.REDIS_HOST}:6379/0",
     include=[
         "app.tasks.email",
     ]
