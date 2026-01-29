@@ -1,14 +1,14 @@
 services:
-  db:
+  identity_db:
     image: postgres:16-alpine
     container_name: identity_db
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
-      POSTGRES_DB: ${POSTGRES_DB:-identity_db}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -18,6 +18,59 @@ services:
     restart: always
     ports:
       - "6379:6379"
+
+  backend:
+    build: .
+    container_name: identity_backend
+    volumes:
+      - .:/app
+      - /app/.venv
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_SERVER=identity_db
+      - REDIS_HOST=redis
+      - UV_COMPILE_BYTECODE=1
+    env_file:
+      - .env
+    depends_on:
+      - identity_db
+      - redis
+
+  worker:
+    build: .
+    container_name: identity_worker
+    command: uv run celery -A app.core.celery_app worker --loglevel=info -E
+    volumes:
+      - .:/app
+      - /app/.venv
+    environment:
+      - POSTGRES_SERVER=identity_db
+      - REDIS_HOST=redis
+      - UV_COMPILE_BYTECODE=1
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - backend
+
+  flower:
+    build: .
+    container_name: identity_flower
+    command: uv run celery -A app.core.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    volumes:
+      - .:/app
+      - /app/.venv
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - REDIS_HOST=redis
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - worker
 
 volumes:
   postgres_data:
