@@ -8,6 +8,8 @@ from app.schemas.user import UserCreate, UserOut
 from app.core.security import get_password_hash
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from app.api.deps import get_current_user
+from app.tasks.email import send_test_email
+
 router = APIRouter()
 
 @router.post("/", response_model=UserOut, status_code=status.HTTP_201_CREATED)
@@ -62,3 +64,18 @@ def read_user_me(
     Get current logged in user information.
     """
     return current_user
+
+
+@router.post("/test-email/{email}", status_code=202)
+def trigger_test_email(
+    email: str,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Trigger a background email task.
+    Returns 202 Accepted immediately without waiting for the email to be sent.
+    """
+    # .delay() is the Celery magic that pushes the task to Redis
+    send_test_email.delay(email)
+    
+    return {"message": "Task received. Email will be sent in the background."}
