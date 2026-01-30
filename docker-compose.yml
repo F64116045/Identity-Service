@@ -24,7 +24,6 @@ services:
     container_name: identity_backend
     volumes:
       - .:/app
-      - /app/.venv
     ports:
       - "8000:8000"
     environment:
@@ -43,7 +42,6 @@ services:
     command: uv run celery -A app.core.celery_app worker --loglevel=info -E
     volumes:
       - .:/app
-      - /app/.venv
     environment:
       - POSTGRES_SERVER=identity_db
       - REDIS_HOST=redis

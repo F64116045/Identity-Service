@@ -13,7 +13,7 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(255), nullable=True)
     
     # Account Status
-    is_active: Mapped[bool] = mapped_column(default=True)
+    is_active: Mapped[bool] = mapped_column(default=False)
     is_superuser: Mapped[bool] = mapped_column(default=False)
     
     # TimeStamp
