@@ -16,6 +16,14 @@ class Settings(BaseSettings):
     SECRET_KEY: str = Field(default="super-secret-key-for-dev-only")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
 
+    # SMTP / Email Settings
+    SMTP_TLS: bool = True
+    SMTP_PORT: int = 587
+    SMTP_HOST: str | None = None
+    SMTP_USER: str | None = None
+    SMTP_PASSWORD: str | None = None
+    EMAILS_FROM_EMAIL: str | None = None
+    EMAILS_FROM_NAME: str | None = Field(default=None, alias="PROJECT_NAME")
 
     model_config = SettingsConfigDict(
         env_file=".env", 

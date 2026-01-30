@@ -34,12 +34,16 @@ def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
         email=user_in.email,
         hashed_password=hashed_password,
         full_name=user_in.full_name,
+        is_active=False
     )
 
     try:
         db.add(db_user)
         db.commit()
         db.refresh(db_user)
+        
+        token = create_verification_token(db_user.email)
+        send_verification_email.delay(db_user.email, token)
     except IntegrityError:
         db.rollback()
         raise HTTPException(

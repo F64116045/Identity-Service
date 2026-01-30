@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.core.db import get_db
 from app.core.config import settings
-from app.core.security import create_access_token, verify_password
+from app.core.security import create_access_token, verify_password, verify_email_token
 from app.models.user import User
 from app.schemas.user import Token
 
@@ -32,10 +32,11 @@ def login_access_token(
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    elif not user.is_active:
+    
+    if not user.is_active:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Inactive user"
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Account not verified. Please check your email."
         )
 
 
@@ -46,3 +47,35 @@ def login_access_token(
         ),
         "token_type": "bearer",
     }
+
+
+@router.get("/verify-email")
+def verify_email(token: str, db: Session = Depends(get_db)):
+    """
+    Endpoint to verify email token and activate user account.
+    """
+    email = verify_email_token(token)
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification token",
+        )
+    
+    query = select(User).where(User.email == email)
+    user = db.execute(query).scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="User not found"
+        )
+    
+    if user.is_active:
+        return {"message": "Email already verified. You can log in."}
+    
+    # Activate the account
+    user.is_active = True
+    db.add(user)
+    db.commit()
+    
+    return {"message": "Account activated successfully! You can now log in."}
