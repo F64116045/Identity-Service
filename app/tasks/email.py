@@ -84,3 +84,45 @@ def send_verification_email(email_to: str, token: str) -> str:
         return f"Verification email sent to {email_to}"
     except Exception as e:
         raise Exception(f"SMTP error: {str(e)}")
+    
+@celery_app.task(name="send_password_reset_email")
+def send_password_reset_email(email_to: str, token: str) -> str:
+    """
+    Send an HTML email with a password reset link.
+    """
+    if not settings.SMTP_HOST:
+        return "SMTP host not configured."
+
+    # This link points to the endpoint where user submits new password
+    # In a real app, this might point to a Frontend UI page
+    reset_url = f"http://localhost:8000{settings.API_V1_STR}/auth/reset-password-ui?token={token}"
+
+    message = MIMEMultipart()
+    message["From"] = f"{settings.EMAILS_FROM_NAME} <{settings.EMAILS_FROM_EMAIL}>"
+    message["To"] = email_to
+    message["Subject"] = "Password Reset Request"
+
+    html_content = f"""
+    <html>
+        <body style="font-family: Arial, sans-serif;">
+            <div style="padding: 20px;">
+                <h2>Password Reset</h2>
+                <p>You requested to reset your password. Click the link below to set a new password:</p>
+                <p><a href="{reset_url}" style="color: #007bff;">Reset Password</a></p>
+                <p>If you didn't request this, you can safely ignore this email.</p>
+                <p>This link expires in 24 hours.</p>
+            </div>
+        </body>
+    </html>
+    """
+    message.attach(MIMEText(html_content, "html"))
+
+    try:
+        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT) as server:
+            if settings.SMTP_TLS:
+                server.starttls()
+            server.login(settings.SMTP_USER or "", settings.SMTP_PASSWORD or "")
+            server.send_message(message)
+        return f"Password reset email sent to {email_to}"
+    except Exception as e:
+        raise Exception(f"SMTP error: {str(e)}")

@@ -1,7 +1,7 @@
 from datetime import timedelta, datetime, timezone
 from typing import Any
 import redis
-from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Request, Body
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -14,15 +14,18 @@ from app.core.security import (
     create_verification_token,
     verify_password, 
     verify_email_token,
+    verify_token_scope, # New helper for verifying password reset tokens
     decode_token,
+    get_password_hash,  # Needed for hashing the new password
 )
 from app.models.user import User
 from app.schemas.user import Token
+# Make sure to implement send_password_reset_email in app/tasks/email.py
+from app.tasks.email import send_password_reset_email 
 
 router = APIRouter()
 
 # Connect to Redis (used for token blacklisting on logout)
-# decode_responses=True ensures we get strings back from Redis instead of bytes
 redis_client = redis.Redis(host=settings.REDIS_HOST, port=6379, db=0, decode_responses=True)
 
 @router.post("/login")
@@ -53,18 +56,17 @@ def login_access_token(
             detail="Account not verified. Please check your email."
         )
 
-
+ 
     user_id = str(user.id)
     access_token = create_access_token(data={"sub": user_id})
     refresh_token = create_refresh_token(data={"sub": user_id})
 
-    # Set HttpOnly Cookie for Refresh Token (Security Best Practice)
-    # This prevents JavaScript from accessing the long-lived token (mitigates XSS)
+
     response.set_cookie(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
-        max_age=60 * 60 * 24 * 7,
+        max_age=60 * 60 * 24 * 7, 
         samesite="lax",
         secure=False,  # Set to True in production (HTTPS)
     )
@@ -110,24 +112,21 @@ def logout(request: Request, response: Response, token: dict = Depends(decode_to
     2. Add the current Access Token to Redis Blacklist until it expires.
     """
     if token:
+        # Calculate remaining time to live (TTL) for the token
         exp = token.get("exp")
-        if exp is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Token missing expiration"
-            )
-        now = datetime.now(timezone.utc).timestamp()
-        ttl = int(exp - now)
-        
-        # If token is still valid, blacklist it
-        if ttl > 0:
-            # Extract the raw token string from the Authorization header
-            auth_header = request.headers.get("Authorization")
-            if auth_header:
-                raw_token = auth_header.split(" ")[1]
-                redis_client.setex(f"blacklist:{raw_token}", ttl, "true")
+        # Ensure exp exists
+        if exp:
+            now = datetime.now(timezone.utc).timestamp()
+            ttl = int(exp - now)
+            
+            # If token is still valid, blacklist it
+            if ttl > 0:
+                auth_header = request.headers.get("Authorization")
+                if auth_header:
+                    raw_token = auth_header.split(" ")[1]
+                    redis_client.setex(f"blacklist:{raw_token}", ttl, "true")
 
-
+    # Clear cookie
     response.delete_cookie("refresh_token")
     return {"message": "Successfully logged out"}
 
@@ -141,13 +140,44 @@ def recover_password(email: str, db: Session = Depends(get_db)):
     user = db.execute(query).scalar_one_or_none()
     
     if user:
+        # Generate token with specific scope "password_reset"
         token = create_verification_token(email, scope="password_reset")
         
-        # TODO: Trigger Celery task here
-        # send_password_reset_email.delay(email, token)
+        # Trigger Celery task
+        send_password_reset_email.delay(email, token)
         
-
+    # Always return a generic message to prevent user enumeration attacks
     return {"message": "If the account exists, a password reset email has been sent."}
+
+@router.post("/reset-password")
+def reset_password(
+    token: str = Body(...), 
+    new_password: str = Body(...), 
+    db: Session = Depends(get_db)
+):
+    """
+    Reset password using the token received in email.
+    """
+    # Verify token specifically for password_reset scope
+    email = verify_token_scope(token, "password_reset")
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
+    
+    query = select(User).where(User.email == email)
+    user = db.execute(query).scalar_one_or_none()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Update password
+    user.hashed_password = get_password_hash(new_password)
+    db.add(user)
+    db.commit()
+    
+    return {"message": "Password updated successfully. You can now log in."}
 
 @router.get("/verify-email")
 def verify_email(token: str, db: Session = Depends(get_db)):

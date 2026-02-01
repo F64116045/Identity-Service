@@ -25,12 +25,17 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     Defaults to settings.ACCESS_TOKEN_EXPIRE_MINUTES.
     """
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (
-        expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    )
+    
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        # Fallback to config setting if no specific delta is provided
+        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    
     # Adding 'type' claim to distinguish between token categories
     to_encode.update({"exp": expire, "type": "access"})
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
 
 def create_refresh_token(data: dict) -> str:
     """
@@ -44,25 +49,31 @@ def create_refresh_token(data: dict) -> str:
 
 def create_verification_token(email: str, scope: str = "email_verification") -> str:
     """
-    Create a token specifically for email verification or password reset (24 hours).
-    Uses 'scope' to define the purpose of the token.
+    Create a token for email verification or password reset (expires in 24h).
+    Now accepts a 'scope' parameter to distinguish usage.
     """
     expire = datetime.now(timezone.utc) + timedelta(hours=24)
     to_encode = {"exp": expire, "sub": email, "scope": scope}
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
+
+def verify_token_scope(token: str, expected_scope: str) -> str | None:
+    """
+    Generic function to verify a token's scope and return the subject (email).
+    """
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("scope") != expected_scope:
+            return None
+        return payload.get("sub")
+    except jwt.PyJWTError:
+        return None
 
 def verify_email_token(token: str) -> str | None:
     """
     Decode and verify the email verification token.
     Ensures the scope is strictly 'email_verification'.
     """
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
-        if payload.get("scope") != "email_verification":
-            return None
-        return payload.get("sub")
-    except jwt.PyJWTError:
-        return None
+    return verify_token_scope(token, "email_verification")
 
 def decode_token(token: str) -> dict | None:
     """
