@@ -5,10 +5,10 @@ from sqlalchemy import select
 from app.core.db import get_db
 from app.models.user import User
 from app.schemas.user import UserCreate, UserOut
-from app.core.security import get_password_hash
+from app.core.security import get_password_hash, create_verification_token
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from app.api.deps import get_current_user
-from app.tasks.email import send_test_email
+from app.tasks.email import send_test_email, send_verification_email
 
 router = APIRouter()
 
