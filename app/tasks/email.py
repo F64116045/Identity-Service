@@ -25,7 +25,7 @@ def send_test_email(email_to: str) -> str:
         if settings.SMTP_TLS:
             server.starttls()
         
-        server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+        server.login(settings.SMTP_USER or "", settings.SMTP_PASSWORD or "")
         server.send_message(message)
         server.quit()
         
@@ -42,6 +42,7 @@ def send_verification_email(email_to: str, token: str) -> str:
     if not settings.SMTP_HOST:
         return "SMTP host not configured."
 
+    # Important
     # For development, this link points to the backend API
     # In production, this should point to Frontend
     verify_url = f"http://localhost:8000{settings.API_V1_STR}/auth/verify-email?token={token}"
@@ -77,7 +78,7 @@ def send_verification_email(email_to: str, token: str) -> str:
         server = smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT)
         if settings.SMTP_TLS:
             server.starttls()
-        server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+        server.login(settings.SMTP_USER or "", settings.SMTP_PASSWORD or "")
         server.send_message(message)
         server.quit()
         return f"Verification email sent to {email_to}"
