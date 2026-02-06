@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
@@ -9,13 +9,20 @@ from app.core.security import get_password_hash, create_verification_token
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from app.api.deps import get_current_user
 from app.tasks.email import send_test_email, send_verification_email
+from app.core.limiter import limiter
 
 router = APIRouter()
 
 @router.post("/", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
+@limiter.limit("5/hour")
+def register_user(
+    request: Request,    # 4. 加入 request 參數
+    user_in: UserCreate, 
+    db: Session = Depends(get_db)
+):
     """
     Register a new user in the system.
+    Rate Limited: 5 per hour.
     """
     # Check if user already exists
     query = select(User).where(User.email == user_in.email)
