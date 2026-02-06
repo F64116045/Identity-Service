@@ -1,3 +1,6 @@
+import secrets
+import hashlib
+import base64
 from datetime import timedelta, datetime, timezone
 from typing import Any
 import redis
@@ -214,6 +217,20 @@ def verify_email(token: str, db: Session = Depends(get_db)):
 
 
 
+def generate_pkce_pair():
+    """
+    Generate a PKCE code_verifier and code_challenge.
+    Returns: (code_verifier, code_challenge)
+    """
+    code_verifier = secrets.token_urlsafe(64)
+    
+    hashed = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    
+    code_challenge = base64.urlsafe_b64encode(hashed).decode("ascii").rstrip("=")
+    
+    return code_verifier, code_challenge
+
+
 @router.get("/login/google")
 def login_google():
     """
@@ -222,6 +239,12 @@ def login_google():
     if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_REDIRECT_URI:
         raise HTTPException(status_code=500, detail="Google OAuth not configured")
 
+    # Generate CSRF State
+    state = secrets.token_urlsafe(32)
+
+    # Generate PKCE Verifier and Challenge
+    code_verifier, code_challenge = generate_pkce_pair()
+
     google_auth_url = (
         "https://accounts.google.com/o/oauth2/auth"
         "?response_type=code"
@@ -229,28 +252,76 @@ def login_google():
         f"&redirect_uri={settings.GOOGLE_REDIRECT_URI}"
         "&scope=openid%20email%20profile"
         "&access_type=offline"
+        f"&state={state}"
+        f"&code_challenge={code_challenge}"
+        "&code_challenge_method=S256"
+    )
+    response = RedirectResponse(google_auth_url)
+     # Determine if we are in production to set 'secure' flag
+    # Assuming you might add an ENVIRONMENT variable later, defaulting to False for local dev
+    is_production = False 
+
+    response.set_cookie(
+        key="oauth_state",
+        value=state,
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=is_production,
+    )
+
+    response.set_cookie(
+        key="oauth_verifier",
+        value=code_verifier,
+        httponly=True,
+        max_age=300,
+        samesite="lax",
+        secure=is_production,
     )
     
-    return RedirectResponse(google_auth_url)
+    return response
 
 
 @router.get("/google/callback")
 async def google_callback(
-    code: str, 
+    request: Request,
     response: Response, 
     db: Session = Depends(get_db)
 ):
     """
-    Process Google Callback:
-    1. Exchange code for Google Token.
-    2. Get user info.
-    3. Register or Login user.
-    4. Issue JWT tokens.
+    Handle Google Callback with State validation and PKCE exchange.
     """
-    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
-        raise HTTPException(status_code=500, detail="Google OAuth configuration missing")
+    # Extract parameters from query string
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    error = request.query_params.get("error")
 
-    # Exchange Code for Token
+    if error:
+        raise HTTPException(status_code=400, detail=f"Google OAuth Error: {error}")
+
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Missing code or state parameter")
+
+    # Retrieve State and Verifier from Cookies
+    cookie_state = request.cookies.get("oauth_state")
+    code_verifier = request.cookies.get("oauth_verifier")
+
+    # A. Validate State (CSRF Protection)
+    if not cookie_state or state != cookie_state:
+        raise HTTPException(status_code=400, detail="Invalid state parameter (Potential CSRF attack)")
+    
+    # B. Ensure we have the PKCE verifier
+    if not code_verifier:
+        raise HTTPException(status_code=400, detail="Missing PKCE verifier")
+
+    # Clean up cookies immediately
+    response.delete_cookie("oauth_state")
+    response.delete_cookie("oauth_verifier")
+
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="Configuration missing")
+
+    # Exchange Code for Token (With PKCE Verifier)
     token_url = "https://oauth2.googleapis.com/token"
     payload = {
         "client_id": settings.GOOGLE_CLIENT_ID,
@@ -258,18 +329,21 @@ async def google_callback(
         "redirect_uri": settings.GOOGLE_REDIRECT_URI,
         "grant_type": "authorization_code",
         "code": code,
+        "code_verifier": code_verifier,
     }
 
     async with httpx.AsyncClient() as client:
-        # Get Google Access Token
+        #Get Access Token
         token_res = await client.post(token_url, data=payload)
+        
         if token_res.status_code != 200:
+            # Helpful for debugging: print(token_res.text)
             raise HTTPException(status_code=400, detail="Failed to retrieve Google token")
         
         token_data = token_res.json()
         google_access_token = token_data.get("access_token")
 
-        # Get User Info
+        #  Get User Info
         user_info_res = await client.get(
             "https://www.googleapis.com/oauth2/v1/userinfo",
             headers={"Authorization": f"Bearer {google_access_token}"}
@@ -279,47 +353,56 @@ async def google_callback(
         
         user_data = user_info_res.json()
         
-    # Extract Data
+    # Extract User Data
     email = user_data.get("email")
     if not email:
         raise HTTPException(status_code=400, detail="Email not found in Google account")
 
-    # Check / Create User
+
     query = select(User).where(User.email == email)
     user = db.execute(query).scalar_one_or_none()
 
     if not user:
-        # New User: Create account (Active by default for social login)
+        # Create new user (Auto-active)
         user = User(
             email=email,
             full_name=user_data.get("name"),
             is_active=True, 
-            hashed_password=None # No password for Google users
+            hashed_password=None
         )
         db.add(user)
         db.commit()
         db.refresh(user)
     else:
-        # Existing User: Ensure account is active if they login via Google
+        # Activate existing user if inactive
         if not user.is_active:
             user.is_active = True
             db.add(user)
             db.commit()
 
-    # Issue Our JWT Tokens
+    # Issue Application Tokens
     user_id = str(user.id)
     access_token = create_access_token(data={"sub": user_id})
     refresh_token = create_refresh_token(data={"sub": user_id})
 
-    # Set HttpOnly Cookie
-    response.set_cookie(
+    # Redirect to Frontend
+    frontend_redirect_url = f"{settings.FRONTEND_URL}/dashboard?token={access_token}"
+    
+    # We use a new RedirectResponse because we need to set the refresh cookie on it
+    redirect_resp = RedirectResponse(frontend_redirect_url)
+    
+    # Set Refresh Token Cookie
+    redirect_resp.set_cookie(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
         max_age=60 * 60 * 24 * 7,
-        samesite="lax", 
-        secure=False,  # Need to change in production
+        samesite="lax",
+        secure=False, 
     )
+    
+    # Ensure cleanup cookies are also cleared on this response object
+    redirect_resp.delete_cookie("oauth_state")
+    redirect_resp.delete_cookie("oauth_verifier")
 
-    frontend_url = f"{settings.FRONTEND_URL}/dashboard?token={access_token}"
-    return RedirectResponse(frontend_url)
+    return redirect_resp
