@@ -26,6 +26,7 @@ from app.models.user import User
 from app.schemas.user import Token
 # Make sure to implement send_password_reset_email in app/tasks/email.py
 from app.tasks.email import send_password_reset_email 
+from app.core.limiter import limiter
 
 router = APIRouter()
 
@@ -33,7 +34,9 @@ router = APIRouter()
 redis_client = redis.Redis(host=settings.REDIS_HOST, port=6379, db=0, decode_responses=True)
 
 @router.post("/login")
+@limiter.limit("5/minute")
 def login_access_token(
+    request: Request,
     response: Response,
     db: Session = Depends(get_db), 
     form_data: OAuth2PasswordRequestForm = Depends()
@@ -135,7 +138,12 @@ def logout(request: Request, response: Response, token: dict = Depends(decode_to
     return {"message": "Successfully logged out"}
 
 @router.post("/password-recovery/{email}")
-def recover_password(email: str, db: Session = Depends(get_db)):
+@limiter.limit("3/minute")
+def recover_password(
+    request: Request, # Required for limiter
+    email: str, 
+    db: Session = Depends(get_db)
+):
     """
     Trigger password recovery process.
     Sends an email with a password reset token (valid for 24h).
