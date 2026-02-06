@@ -1,11 +1,12 @@
 from datetime import timedelta, datetime, timezone
 from typing import Any
 import redis
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request, Body
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-
+from fastapi.responses import RedirectResponse
 from app.core.db import get_db
 from app.core.config import settings
 from app.core.security import (
@@ -209,3 +210,116 @@ def verify_email(token: str, db: Session = Depends(get_db)):
     db.commit()
     
     return {"message": "Account activated successfully! You can now log in."}
+
+
+
+
+@router.get("/login/google")
+def login_google():
+    """
+    Generate the Google Login URL and redirect the user to Google.
+    """
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_REDIRECT_URI:
+        raise HTTPException(status_code=500, detail="Google OAuth not configured")
+
+    google_auth_url = (
+        "https://accounts.google.com/o/oauth2/auth"
+        "?response_type=code"
+        f"&client_id={settings.GOOGLE_CLIENT_ID}"
+        f"&redirect_uri={settings.GOOGLE_REDIRECT_URI}"
+        "&scope=openid%20email%20profile"
+        "&access_type=offline"
+    )
+    
+    return RedirectResponse(google_auth_url)
+
+
+@router.get("/google/callback")
+async def google_callback(
+    code: str, 
+    response: Response, 
+    db: Session = Depends(get_db)
+):
+    """
+    Process Google Callback:
+    1. Exchange code for Google Token.
+    2. Get user info.
+    3. Register or Login user.
+    4. Issue JWT tokens.
+    """
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="Google OAuth configuration missing")
+
+    # Exchange Code for Token
+    token_url = "https://oauth2.googleapis.com/token"
+    payload = {
+        "client_id": settings.GOOGLE_CLIENT_ID,
+        "client_secret": settings.GOOGLE_CLIENT_SECRET,
+        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+        "grant_type": "authorization_code",
+        "code": code,
+    }
+
+    async with httpx.AsyncClient() as client:
+        # Get Google Access Token
+        token_res = await client.post(token_url, data=payload)
+        if token_res.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to retrieve Google token")
+        
+        token_data = token_res.json()
+        google_access_token = token_data.get("access_token")
+
+        # Get User Info
+        user_info_res = await client.get(
+            "https://www.googleapis.com/oauth2/v1/userinfo",
+            headers={"Authorization": f"Bearer {google_access_token}"}
+        )
+        if user_info_res.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to retrieve user info")
+        
+        user_data = user_info_res.json()
+        
+    # Extract Data
+    email = user_data.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email not found in Google account")
+
+    # Check / Create User
+    query = select(User).where(User.email == email)
+    user = db.execute(query).scalar_one_or_none()
+
+    if not user:
+        # New User: Create account (Active by default for social login)
+        user = User(
+            email=email,
+            full_name=user_data.get("name"),
+            is_active=True, 
+            hashed_password=None # No password for Google users
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    else:
+        # Existing User: Ensure account is active if they login via Google
+        if not user.is_active:
+            user.is_active = True
+            db.add(user)
+            db.commit()
+
+    # Issue Our JWT Tokens
+    user_id = str(user.id)
+    access_token = create_access_token(data={"sub": user_id})
+    refresh_token = create_refresh_token(data={"sub": user_id})
+
+    # Set HttpOnly Cookie
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        max_age=60 * 60 * 24 * 7,
+        samesite="lax", 
+        secure=False,  # Need to change in production
+    )
+
+    frontend_url = f"{settings.FRONTEND_URL}/dashboard?token={access_token}"
+    return RedirectResponse(frontend_url)
