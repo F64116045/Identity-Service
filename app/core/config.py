@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
     FRONTEND_URL: str | None = None
     BACKEND_CORS_ORIGINS: str | None = None
+    ENVIRONMENT: str | None = "development"
     model_config = SettingsConfigDict(
         env_file=".env", 
         env_file_encoding="utf-8",
