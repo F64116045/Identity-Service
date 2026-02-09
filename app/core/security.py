@@ -2,17 +2,20 @@ import jwt
 from datetime import datetime, timedelta, timezone
 from passlib.context import CryptContext
 from app.core.config import settings
+from app.core.metrics import CRYPTO_OP_DURATION
 
 # Initialize Argon2 password hashing context
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 ALGORITHM = "HS256"
 
+@CRYPTO_OP_DURATION.time()
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """
     Verify if a plain text password matches the stored hash.
     """
     return pwd_context.verify(plain_password, hashed_password)
 
+@CRYPTO_OP_DURATION.time()
 def get_password_hash(password: str) -> str:
     """
     Generate an Argon2 hash from a plain text password.
