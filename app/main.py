@@ -7,12 +7,18 @@ from app.core.limiter import limiter
 from app.core.config import settings
 from app.api.v1.endpoints import users
 from app.api.v1.endpoints import auth
+from app.core.logging import setup_logging
+from app.middleware.log_middleware import LoggingMiddleware
+
+setup_logging()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
+
+app.add_middleware(LoggingMiddleware)
 
 # CORS
 if settings.BACKEND_CORS_ORIGINS:
