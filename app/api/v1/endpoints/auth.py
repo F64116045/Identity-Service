@@ -27,6 +27,8 @@ from app.schemas.user import Token
 # Make sure to implement send_password_reset_email in app/tasks/email.py
 from app.tasks.email import send_password_reset_email 
 from app.core.limiter import limiter
+from app.core.logging import logger
+from app.schemas.auth import GoogleUserInfo
 
 router = APIRouter()
 
@@ -290,137 +292,125 @@ def login_google():
     return response
 
 
+
 @router.get("/google/callback")
 async def google_callback(
     request: Request,
-    response: Response, 
     db: Session = Depends(get_db)
 ):
     """
-    Handle Google Callback with State validation and PKCE exchange.
+    Handle Google OAuth2 Callback with structured logging and type-safe data handling.
     """
-    # Extract parameters from query string
+    # 1. Extract and validate basic query parameters
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     error = request.query_params.get("error")
 
     if error:
-        raise HTTPException(status_code=400, detail=f"Google OAuth Error: {error}")
+        logger.error("google_oauth_callback_error", error=error)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Google Error: {error}")
 
     if not code or not state:
-        raise HTTPException(status_code=400, detail="Missing code or state parameter")
+        logger.warning("google_oauth_missing_params")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing code or state")
 
-    # Retrieve State and Verifier from Cookies
+    # 2. CSRF & PKCE Validation
     cookie_state = request.cookies.get("oauth_state")
     code_verifier = request.cookies.get("oauth_verifier")
 
-    # A. Validate State (CSRF Protection)
     if not cookie_state or state != cookie_state:
-        raise HTTPException(status_code=400, detail="Invalid state parameter (Potential CSRF attack)")
-    
-    # B. Ensure we have the PKCE verifier
+        logger.error("google_oauth_csrf_detected", state=state, cookie_state=cookie_state)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CSRF validation failed")
+
     if not code_verifier:
-        raise HTTPException(status_code=400, detail="Missing PKCE verifier")
+        logger.error("google_oauth_missing_verifier")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="PKCE verifier not found")
 
-    # Clean up cookies immediately
-    response.delete_cookie("oauth_state")
-    response.delete_cookie("oauth_verifier")
-
-    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_CLIENT_SECRET:
-        raise HTTPException(status_code=500, detail="Configuration missing")
-
-    # Exchange Code for Token (With PKCE Verifier)
-    token_url = "https://oauth2.googleapis.com/token"
-    payload = {
-        "client_id": settings.GOOGLE_CLIENT_ID,
-        "client_secret": settings.GOOGLE_CLIENT_SECRET,
-        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
-        "grant_type": "authorization_code",
-        "code": code,
-        "code_verifier": code_verifier,
-    }
-
+    # 3. Exchange Code for Access Token
+    logger.info("google_oauth_exchanging_code")
     async with httpx.AsyncClient() as client:
-        #Get Access Token
-        token_res = await client.post(token_url, data=payload)
+        token_url = "https://oauth2.googleapis.com/token"
+        token_payload = {
+            "client_id": settings.GOOGLE_CLIENT_ID,
+            "client_secret": settings.GOOGLE_CLIENT_SECRET,
+            "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+            "grant_type": "authorization_code",
+            "code": code,
+            "code_verifier": code_verifier,
+        }
         
+        token_res = await client.post(token_url, data=token_payload)
         if token_res.status_code != 200:
-            # Helpful for debugging: print(token_res.text)
-            raise HTTPException(status_code=400, detail="Failed to retrieve Google token")
-        
-        token_data = token_res.json()
-        google_access_token = token_data.get("access_token")
+            logger.error("google_token_exchange_failed", response=token_res.text)
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to get tokens")
 
-        #  Get User Info
+        google_tokens = token_res.json()
+        access_token_google = google_tokens.get("access_token")
+
+        # 4. Fetch User Info from Google
         user_info_res = await client.get(
             "https://www.googleapis.com/oauth2/v1/userinfo",
-            headers={"Authorization": f"Bearer {google_access_token}"}
+            headers={"Authorization": f"Bearer {access_token_google}"}
         )
         if user_info_res.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to retrieve user info")
-        
-        user_data = user_info_res.json()
-        
-    # Extract User Data
-    email = user_data.get("email")
-    if not email:
-        raise HTTPException(status_code=400, detail="Email not found in Google account")
+            logger.error("google_user_info_fetch_failed", response=user_info_res.text)
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to get user info")
 
+        # Parse with Pydantic for type safety
+        try:
+            google_user = GoogleUserInfo(**user_info_res.json())
+        except Exception as e:
+            logger.error("google_user_data_parsing_failed", error=str(e))
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid user data format")
 
-    query = select(User).where(User.email == email)
+    # 5. Database Logic: Account Upsert/Linking
+    query = select(User).where(User.email == google_user.email)
     user = db.execute(query).scalar_one_or_none()
 
     if not user:
-        # Create new user (Auto-active)
+        logger.info("google_oauth_creating_new_user", email=google_user.email)
         user = User(
-            email=email,
-            full_name=user_data.get("name"),
-            is_active=True, 
+            email=google_user.email,
+            full_name=google_user.name,
+            is_active=True,  # OAuth users are pre-verified
             hashed_password=None
         )
         db.add(user)
-        db.commit()
-        db.refresh(user)
     else:
-        # Activate existing user if inactive
+        logger.info("google_oauth_login_existing_user", email=google_user.email)
         if not user.is_active:
             user.is_active = True
             db.add(user)
-            db.commit()
+    
+    try:
+        db.commit()
+        db.refresh(user)
+    except Exception as e:
+        db.rollback()
+        logger.error("google_oauth_db_commit_failed", error=str(e))
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database error")
 
-    # Issue Application Tokens
+    # 6. Build Response and Set Application Tokens
+    response = RedirectResponse(url=f"{settings.FRONTEND_URL}/dashboard")
+    
+    # Issue JWTs
     user_id = str(user.id)
     access_token = create_access_token(data={"sub": user_id})
     refresh_token = create_refresh_token(data={"sub": user_id})
 
-    # Redirect to Frontend
-    frontend_redirect_url = f"{settings.FRONTEND_URL}/dashboard"
-    is_prod = settings.ENVIRONMENT == "production"
-    # We use a new RedirectResponse because we need to set the refresh cookie on it
-    redirect_resp = RedirectResponse(frontend_redirect_url)
-    
-    # Set Access Token Cookie (Short-lived)
-    redirect_resp.set_cookie(
-        key="access_token",
-        value=access_token,
-        httponly=True,
-        secure=is_prod,
-        samesite="lax",
-        max_age=900,
-    )
+    # Cookie configuration
+    cookie_params = {
+        "httponly": True,
+        "secure": settings.ENVIRONMENT == "production",
+        "samesite": "lax",
+    }
 
-    # Set Refresh Token Cookie (Long-lived)
-    redirect_resp.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=is_prod,
-        samesite="lax",
-        max_age=604800, # 7 days
-    )
-    
-    # Ensure cleanup cookies are also cleared on this response object
-    redirect_resp.delete_cookie("oauth_state")
-    redirect_resp.delete_cookie("oauth_verifier")
+    response.set_cookie(key="access_token", value=access_token, max_age=900, **cookie_params)
+    response.set_cookie(key="refresh_token", value=refresh_token, max_age=604800, **cookie_params)
 
-    return redirect_resp
+    # Cleanup OAuth cookies on the SAME response object
+    response.delete_cookie("oauth_state")
+    response.delete_cookie("oauth_verifier")
+
+    logger.info("google_oauth_success", user_id=user_id)
+    return response
