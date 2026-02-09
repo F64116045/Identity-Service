@@ -394,19 +394,29 @@ async def google_callback(
     refresh_token = create_refresh_token(data={"sub": user_id})
 
     # Redirect to Frontend
-    frontend_redirect_url = f"{settings.FRONTEND_URL}/dashboard?token={access_token}"
-    
+    frontend_redirect_url = f"{settings.FRONTEND_URL}/dashboard"
+    is_prod = settings.ENVIRONMENT == "production"
     # We use a new RedirectResponse because we need to set the refresh cookie on it
     redirect_resp = RedirectResponse(frontend_redirect_url)
     
-    # Set Refresh Token Cookie
+    # Set Access Token Cookie (Short-lived)
+    redirect_resp.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=is_prod,
+        samesite="lax",
+        max_age=900,
+    )
+
+    # Set Refresh Token Cookie (Long-lived)
     redirect_resp.set_cookie(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
-        max_age=60 * 60 * 24 * 7,
+        secure=is_prod,
         samesite="lax",
-        secure=False, 
+        max_age=604800, # 7 days
     )
     
     # Ensure cleanup cookies are also cleared on this response object
