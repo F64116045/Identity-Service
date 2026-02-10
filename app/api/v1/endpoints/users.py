@@ -16,7 +16,7 @@ router = APIRouter()
 @router.post("/", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 @limiter.limit("5/hour")
 def register_user(
-    request: Request,    # 4. 加入 request 參數
+    request: Request, 
     user_in: UserCreate, 
     db: Session = Depends(get_db)
 ):
