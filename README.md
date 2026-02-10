@@ -1,6 +1,7 @@
 # Identity Management Service
 
-A robust, asynchronous authentication service. This project implements modern OAuth2 standards , rate limiting, and a full observability stack using Infrastructure as Code (IaC) principles.
+A robust authentication service for microservices, fully OIDC-compliant.
+Supports asymmetric encryption (RS256) signing, modern OAuth2 flows, rate limiting, and a complete observability stack (PLG), all managed using Infrastructure as Code (IaC) principles.
 
 ## System Architecture
 
@@ -8,13 +9,16 @@ The system follows a microservices-ready architecture, utilizing containerizatio
 
 ```mermaid
 flowchart TD
-    
-
     User([Client User Agent])
 
     subgraph Application_Layer
         API[FastAPI Identity Service]
         Worker[[Celery Worker]]
+    end
+
+    subgraph Security_Infrastructure
+        Keys[RSA Key Pair]
+        JWKS["/.well-known/jwks.json"]
     end
 
     subgraph Data_Infrastructure
@@ -24,30 +28,25 @@ flowchart TD
 
     subgraph Observability_Stack
         Promtail((Promtail Agent))
-        
         Loki[(Loki Log Store)]
         Prometheus[(Prometheus TSDB)]
-        
         Grafana{{Grafana Dashboard}}
     end
 
-
-    User --> API
+    User -->|Login Credentials| API
+    API -->|Sign Token RS256| Keys
+    User -->|Fetch Public Key| JWKS
+    
     API --> Redis
     API --> PG
-    
 
     API -.->|Dispatch Task| Redis
     Redis -.->|Consume Task| Worker
     Worker --> PG
 
-
     Prometheus -->|Pull Metrics| API
-    Promtail -.->|Tail Logs| API
-    Promtail -.->|Tail Logs| Worker
+    Promtail -.->|Tail JSON Logs| API
     Promtail -->|Push Logs| Loki
-    
-
     Grafana --> Prometheus
     Grafana --> Loki
 ```
@@ -56,16 +55,11 @@ flowchart TD
 
 ### Security & Authentication
 
+- **Asymmetric Cryptography (RS256)**: Migrated from shared secrets (HS256) to **RSA Public/Private Key pairs**. Tokens are signed with a private key, allowing any downstream microservice to verify integrity using the public key without contacting the IDP.
+- **JWKS & OIDC Discovery**: Implements standard `/.well-known/jwks.json` and `openid-configuration` endpoints, enabling seamless integration with third-party resource servers and frontend frameworks.
+- **Key Rotation Support**: Tokens include `kid` (Key ID) headers to support zero-downtime key rotation strategies.
 - **OAuth2 Authorization Code Flow with PKCE**: Implements Proof Key for Code Exchange (PKCE) to prevent code interception attacks, ensuring secure mobile and SPA integrations.
 - **State Parameter Validation**: Strictly enforces state validation during OAuth2 callbacks to mitigate Cross-Site Request Forgery (CSRF) attacks.
-- **Double-Token Architecture**: Utilizes short-lived JWTs for stateless API access and HttpOnly, Secure cookies for refresh tokens to balance security and user experience.
-- **Argon2id Hashing**: Industry-standard password hashing configuration.
-
-### Performance & Scalability
-
-- **Background Task Processing**: Decouples blocking operations (email delivery) from the main request-response cycle using Celery and Redis.
-- **Database Connection Pooling**: Optimized SQLAlchemy configuration with connection pooling to reduce handshake overhead and manage database load efficiently.
-- **Rate Limiting**: Redis-backed sliding window algorithm prevents API abuse and ensures service availability across distributed replicas.
 
 ### Observability (PLG Stack)
 
@@ -106,10 +100,9 @@ flowchart TD
 ### Prerequisites
 
 - Docker & Docker Compose
+- OpenSSL (for generating keys)
 
-## Quick Start
-
-### 1. Configuration
+### 1. Configuration & Key Generation
 
 Clone the repository and configure the environment variables:
 
@@ -117,12 +110,24 @@ Clone the repository and configure the environment variables:
 cp .env.example .env
 ```
 
+**Generate RSA Key Pair (Critical Step):**
+
+Since this project uses RS256, you must generate signing keys before starting.
+
+```bash
+mkdir certs
+# 1. Generate Private Key
+openssl genrsa -out certs/private.pem 2048
+# 2. Extract Public Key
+openssl rsa -in certs/private.pem -pubout -out certs/public.pem
+```
+
 ### 2. Deployment
 
 Start the entire stack (Application, Database, Workers, and Monitoring) in detached mode:
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
 ### 3. Service Access
@@ -130,20 +135,20 @@ docker compose up -d
 | **Service** | **Endpoint** | **Description** |
 | --- | --- | --- |
 | **API Documentation** | `http://localhost:8000/docs` | Swagger UI |
+| **JWKS Endpoint** | `http://localhost:8000/.well-known/jwks.json` | Public Keys for Token Verification |
+| **OIDC Config** | `http://localhost:8000/.well-known/openid-configuration` | OIDC Discovery |
 | **Grafana** | `http://localhost:3000` | Monitoring Dashboard (Default: admin/admin) |
 | **Prometheus** | `http://localhost:9090` | Metrics Scraper |
 | **Flower** | `http://localhost:5555` | Celery Worker Monitor |
 
 ## Monitoring & Troubleshooting
 
-**Accessing Logs:**
+**Accessing Structured Logs:**
 
-Logs are aggregated in Grafana. Navigate to the "FastAPI Identity Monitor" dashboard to view live logs filtered by the application container.
+Logs are aggregated in Grafana (Loki). You can query specific authentication events using LogQL:
 
-**Worker Status:**
-
-Background task status (Queued, Started, Failed) can be monitored via the Flower interface on port 5555.
+`{app="identity-service"} | json | event="auth.token_revoked"`
 
 **Metrics:**
 
-Business metrics such as `identity_auth_events_total` are available in Prometheus and visualized in Grafana to track authentication health.
+Business metrics such as `identity_auth_events_total` are available in Prometheus and visualized in Grafana.

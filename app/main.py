@@ -13,6 +13,7 @@ from app.api.v1.endpoints import health
 from app.core.logging import setup_logging
 from app.core.metrics import setup_metrics
 from app.middleware.log_middleware import LoggingMiddleware
+from app.api.v1.endpoints import well_known
 
 
 @asynccontextmanager
@@ -58,7 +59,7 @@ setup_metrics(app)
 app.include_router(health.router, prefix=settings.API_V1_STR, tags=["health"])
 app.include_router(auth.router, prefix=f"{settings.API_V1_STR}/auth", tags=["auth"])
 app.include_router(users.router, prefix=f"{settings.API_V1_STR}/users", tags=["users"])
-
+app.include_router(well_known.router, prefix="/.well-known", tags=["Discovery"])
 
 @app.get("/")
 async def root():
