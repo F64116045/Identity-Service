@@ -24,11 +24,11 @@ from app.core.security import (
 )
 from app.models.user import User
 from app.schemas.user import Token
-# Make sure to implement send_password_reset_email in app/tasks/email.py
 from app.tasks.email import send_password_reset_email 
 from app.core.limiter import limiter
 from app.core.logging import logger
 from app.schemas.auth import GoogleUserInfo
+from app.core.metrics import AUTH_EVENTS
 
 router = APIRouter()
 
@@ -53,6 +53,7 @@ def login_access_token(
     user = db.execute(query).scalar_one_or_none()
 
     if not user or not verify_password(form_data.password, user.hashed_password):
+        AUTH_EVENTS.labels(method="password_login", status="failure").inc()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -60,6 +61,7 @@ def login_access_token(
         )
     
     if not user.is_active:
+        AUTH_EVENTS.labels(method="password_login", status="inactive").inc()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, 
             detail="Account not verified. Please check your email."
@@ -80,6 +82,7 @@ def login_access_token(
         secure=False,  # Set to True in production (HTTPS)
     )
 
+    AUTH_EVENTS.labels(method="password_login", status="success").inc()
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -92,6 +95,7 @@ def refresh_token(request: Request):
     """
     token = request.cookies.get("refresh_token")
     if not token:
+        AUTH_EVENTS.labels(method="refresh_token", status="missing").inc()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
             detail="Refresh token missing"
@@ -100,6 +104,7 @@ def refresh_token(request: Request):
     # Verify the token
     payload = decode_token(token)
     if not payload or payload.get("type") != "refresh":
+        AUTH_EVENTS.labels(method="refresh_token", status="invalid").inc()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
             detail="Invalid or expired refresh token"
@@ -108,6 +113,8 @@ def refresh_token(request: Request):
     # Issue new access token
     new_access_token = create_access_token(data={"sub": payload.get("sub")})
     
+
+    AUTH_EVENTS.labels(method="refresh_token", status="success").inc()
     return {
         "access_token": new_access_token,
         "token_type": "bearer"
@@ -136,6 +143,7 @@ def logout(request: Request, response: Response, token: dict = Depends(decode_to
                     redis_client.setex(f"blacklist:{raw_token}", ttl, "true")
 
     # Clear cookie
+    AUTH_EVENTS.labels(method="logout", status="success").inc()
     response.delete_cookie("refresh_token")
     return {"message": "Successfully logged out"}
 
@@ -288,7 +296,7 @@ def login_google():
         samesite="lax",
         secure=is_production,
     )
-    
+
     return response
 
 
@@ -307,10 +315,12 @@ async def google_callback(
     error = request.query_params.get("error")
 
     if error:
+        AUTH_EVENTS.labels(method="google_login", status="error_callback").inc()
         logger.error("google_oauth_callback_error", error=error)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Google Error: {error}")
 
     if not code or not state:
+        AUTH_EVENTS.labels(method="google_login", status="error_callback").inc()
         logger.warning("google_oauth_missing_params")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing code or state")
 
@@ -319,10 +329,12 @@ async def google_callback(
     code_verifier = request.cookies.get("oauth_verifier")
 
     if not cookie_state or state != cookie_state:
+        AUTH_EVENTS.labels(method="google_login", status="error_callback").inc()
         logger.error("google_oauth_csrf_detected", state=state, cookie_state=cookie_state)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CSRF validation failed")
 
     if not code_verifier:
+        AUTH_EVENTS.labels(method="google_login", status="error_callback").inc()
         logger.error("google_oauth_missing_verifier")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="PKCE verifier not found")
 
@@ -341,6 +353,7 @@ async def google_callback(
         
         token_res = await client.post(token_url, data=token_payload)
         if token_res.status_code != 200:
+            AUTH_EVENTS.labels(method="google_login", status="error_callback").inc()
             logger.error("google_token_exchange_failed", response=token_res.text)
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to get tokens")
 
@@ -353,6 +366,7 @@ async def google_callback(
             headers={"Authorization": f"Bearer {access_token_google}"}
         )
         if user_info_res.status_code != 200:
+            AUTH_EVENTS.labels(method="google_login", status="error_callback").inc()
             logger.error("google_user_info_fetch_failed", response=user_info_res.text)
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to get user info")
 
@@ -360,6 +374,7 @@ async def google_callback(
         try:
             google_user = GoogleUserInfo(**user_info_res.json())
         except Exception as e:
+            AUTH_EVENTS.labels(method="google_login", status="error_callback").inc()
             logger.error("google_user_data_parsing_failed", error=str(e))
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid user data format")
 
@@ -411,6 +426,8 @@ async def google_callback(
     # Cleanup OAuth cookies on the SAME response object
     response.delete_cookie("oauth_state")
     response.delete_cookie("oauth_verifier")
+    
+    AUTH_EVENTS.labels(method="google_login", status="success").inc()
 
     logger.info("google_oauth_success", user_id=user_id)
     return response

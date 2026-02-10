@@ -11,6 +11,8 @@ services:
       - "${POSTGRES_PORT}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - monitor-net
 
   redis:
     image: redis:7-alpine
@@ -18,10 +20,12 @@ services:
     restart: always
     ports:
       - "6379:6379"
+    networks:
+      - monitor-net
 
-  backend:
+  identity-service:
     build: .
-    container_name: identity_backend
+    container_name: identity-service
     volumes:
       - .:/app
     ports:
@@ -35,6 +39,17 @@ services:
     depends_on:
       - identity_db
       - redis
+    logging:
+      driver: "json-file" 
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "{{.Name}}"
+    labels:
+      logging: "promtail"
+      service: "identity-service"
+    networks:
+      - monitor-net
 
   worker:
     build: .
@@ -50,7 +65,9 @@ services:
       - .env
     depends_on:
       - redis
-      - backend
+      - identity-service
+    networks:
+      - monitor-net
 
   flower:
     build: .
@@ -69,13 +86,19 @@ services:
     depends_on:
       - redis
       - worker
-      
+    networks:
+      - monitor-net
+
   prometheus:
     image: prom/prometheus:latest
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"
+    depends_on:
+      - loki
+    networks:
+      - monitor-net
 
   grafana:
     image: grafana/grafana:latest
@@ -85,6 +108,39 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     depends_on:
       - prometheus
+      - loki
+    volumes:
+      - grafana-storage:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards_json:/var/lib/grafana/dashboards
+    networks:
+      - monitor-net
+    
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - monitor-net
+  
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./promtail-config.yaml:/etc/promtail/config.yml
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    networks:
+      - monitor-net
 
 volumes:
   postgres_data:
+  grafana-storage:
+
+networks:
+  monitor-net:
+    driver: bridge
