@@ -13,3 +13,8 @@ wheels/
 .env
 
 .vscode
+
+# Security keys
+certs/private.pem
+certs/public.pem
+*.pem

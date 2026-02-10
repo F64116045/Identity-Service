@@ -1,10 +1,33 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
+import os
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Identity Service"
     VERSION: str = "0.1.0"
     API_V1_STR: str = "/api/v1"
+
+    ALGORITHM: str = "RS256"
+    SIG_KEY_ID: str = "dev-key-001"
+    PRIVATE_KEY_PATH: str = "certs/private.pem"
+    PUBLIC_KEY_PATH: str = "certs/public.pem"
+    @property
+    def PRIVATE_KEY(self) -> str:
+        """Read content of the private key file"""
+        path = self.PRIVATE_KEY_PATH
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Private key not found at {path}")
+        with open(path, "r") as f:
+            return f.read()
+
+    @property
+    def PUBLIC_KEY(self) -> str:
+        """Read content of the public key file"""
+        path = self.PUBLIC_KEY_PATH
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Public key not found at {path}")
+        with open(path, "r") as f:
+            return f.read()
 
     POSTGRES_SERVER: str = Field(default="localhost")
     POSTGRES_USER: str = Field(default="postgres")
