@@ -29,6 +29,9 @@ from app.core.limiter import limiter
 from app.core.logging import logger
 from app.schemas.auth import GoogleUserInfo
 from app.core.metrics import AUTH_EVENTS
+from app.schemas.user import UserPasswordUpdate
+from app.api.deps import get_current_user
+
 
 router = APIRouter()
 
@@ -232,6 +235,38 @@ def verify_email(token: str, db: Session = Depends(get_db)):
     
     return {"message": "Account activated successfully! You can now log in."}
 
+
+@router.post("/change-password", status_code=status.HTTP_200_OK)
+def change_password(
+    body: UserPasswordUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Change user password. 
+    Requires current password for verification.
+    """
+    # Verify the current password
+    if not verify_password(body.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Incorrect password"
+        )
+
+    # Check if new password is same as old (Optional security practice)
+    if body.current_password == body.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password cannot be the same as the current password"
+        )
+
+    # 3. Hash the new password and save
+    current_user.hashed_password = get_password_hash(body.new_password)
+    
+    db.add(current_user)
+    db.commit()
+    
+    return {"message": "Password updated successfully"}
 
 
 

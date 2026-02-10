@@ -4,13 +4,15 @@ from sqlalchemy import select
 
 from app.core.db import get_db
 from app.models.user import User
-from app.schemas.user import UserCreate, UserOut
+from app.schemas.user import UserOut, UserUpdate, UserDelete, UserCreate
 from app.core.security import get_password_hash, create_verification_token
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
 from app.api.deps import get_current_user
 from app.tasks.email import send_test_email, send_verification_email
 from app.core.limiter import limiter
-
+from app.schemas.user import UserOut, UserUpdate
+from app.api.deps import get_current_user
+from app.core.security import verify_password
 router = APIRouter()
 
 @router.post("/", response_model=UserOut, status_code=status.HTTP_201_CREATED)
@@ -90,3 +92,68 @@ def trigger_test_email(
     send_test_email.delay(email)
     
     return {"message": "Task received. Email will be sent in the background."}
+
+
+@router.patch("/me", response_model=UserOut)
+def update_user_me(
+    user_in: UserUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Update current user profile.
+    Only provided fields will be updated.
+    """
+    # Check if email is being updated and if it's already taken
+    if user_in.email and user_in.email != current_user.email:
+        existing_user = db.query(User).filter(User.email == user_in.email).first()
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Email already registered",
+            )
+
+    # Update user attributes dynamically
+    user_data = user_in.model_dump(exclude_unset=True)
+    for field, value in user_data.items():
+        setattr(current_user, field, value)
+
+    db.add(current_user)
+    db.commit()
+    db.refresh(current_user)
+    
+    return current_user
+
+@router.delete("/me", status_code=status.HTTP_200_OK)
+def delete_user_me(
+    body: UserDelete,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Permanently delete the current user's account.
+    
+    This is a hard delete operation. It requires password verification
+    to ensure the request is legitimate.
+    """
+    
+    # Verify the provided password against the stored hash
+    if not verify_password(body.password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Incorrect password"
+        )
+
+    # Perform the hard delete
+    try:
+        db.delete(current_user)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        # Log the error here if you have a logger configured
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete account"
+        )
+    
+    return {"message": "Account deleted successfully"}
