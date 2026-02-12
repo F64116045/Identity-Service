@@ -90,3 +90,23 @@ def get_current_user(
         )
 
     return user
+
+def get_current_superuser(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """
+    Dependency to verify if the current user has superuser privileges.
+    Layered on top of `get_current_user` to ensure authentication first.
+    """
+    if not current_user.is_superuser:
+        # Log the unauthorized access attempt with context
+        logger.warning(
+            "auth.insufficient_privileges", 
+            user_id=current_user.email,
+            required_role="superuser"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The user doesn't have enough privileges"
+        )
+    return current_user

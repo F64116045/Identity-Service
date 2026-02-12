@@ -1,4 +1,5 @@
 from pydantic import BaseModel, EmailStr, ConfigDict, Field
+from typing import List
 
 
 class UserBase(BaseModel):
@@ -44,3 +45,23 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     user_id: str | None = None
+
+
+class UserAdminUpdate(BaseModel):
+    """
+    Schema for Admin-only updates.
+    Allows modifying sensitive fields like account status and role.
+    """
+    email: EmailStr | None = None
+    full_name: str | None = None
+    is_active: bool | None = None
+    is_superuser: bool | None = None
+    password: str | None = Field(None, min_length=8, description="Admin reset password")
+
+
+class UserListResponse(BaseModel):
+    """
+    Pagination response wrapper.
+    """
+    total: int
+    items: List[UserOut]

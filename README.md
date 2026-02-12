@@ -61,6 +61,13 @@ flowchart TD
 - **OAuth2 Authorization Code Flow with PKCE**: Implements Proof Key for Code Exchange (PKCE) to prevent code interception attacks, ensuring secure mobile and SPA integrations.
 - **State Parameter Validation**: Strictly enforces state validation during OAuth2 callbacks to mitigate Cross-Site Request Forgery (CSRF) attacks.
 
+### Performance & Scalability
+
+- **Background Task Processing**: Decouples blocking operations (email delivery) from the main request-response cycle using Celery and Redis.
+- **Database Connection Pooling**: Optimized SQLAlchemy configuration with connection pooling to reduce handshake overhead and manage database load efficiently.
+- **Rate Limiting**: Redis-backed fixedwindow algorithm prevents API abuse and ensures service availability.
+
+
 ### Observability (PLG Stack)
 
 - **Infrastructure as Code (IaC)**: Grafana dashboards and datasources are automatically provisioned via configuration files, eliminating manual setup.
