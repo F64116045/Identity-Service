@@ -18,9 +18,10 @@ from app.core.security import (
     create_verification_token,
     verify_password, 
     verify_email_token,
-    verify_token_scope, # New helper for verifying password reset tokens
+    verify_token_purpose, # New helper for verifying password reset tokens
     decode_token,
     get_password_hash,  # Needed for hashing the new password
+    get_user_scope_string
 )
 from app.models.user import User
 from app.schemas.user import Token
@@ -72,8 +73,10 @@ def login_access_token(
 
  
     user_id = str(user.id)
-    access_token = create_access_token(data={"sub": user_id})
-    refresh_token = create_refresh_token(data={"sub": user_id})
+    scopes = get_user_scope_string(user.is_superuser)
+
+    access_token = create_access_token(data={"sub": user_id, "scopes": scopes})
+    refresh_token = create_refresh_token(data={"sub": user_id, "scopes": scopes})
 
 
     response.set_cookie(
@@ -92,7 +95,10 @@ def login_access_token(
     }
 
 @router.post("/refresh")
-def refresh_token(request: Request):
+def refresh_token(
+    request: Request, 
+    db: Session = Depends(get_db)
+):
     """
     Exchange a valid Refresh Token (from Cookie) for a new Access Token.
     """
@@ -113,8 +119,20 @@ def refresh_token(request: Request):
             detail="Invalid or expired refresh token"
         )
     
+    user_id = payload.get("sub")
+    query = select(User).where(User.id == user_id)
+    user = db.execute(query).scalar_one_or_none()
+    
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="User no longer active"
+        )
+    
+    scopes = get_user_scope_string(user.is_superuser)
+
     # Issue new access token
-    new_access_token = create_access_token(data={"sub": payload.get("sub")})
+    new_access_token = create_access_token(data={"sub": user_id, "scopes": scopes})
     
 
     AUTH_EVENTS.labels(method="refresh_token", status="success").inc()
@@ -166,7 +184,7 @@ def recover_password(
     
     if user:
         # Generate token with specific scope "password_reset"
-        token = create_verification_token(email, scope="password_reset")
+        token = create_verification_token(email, purpose="password_reset")
         
         # Trigger Celery task
         send_password_reset_email.delay(email, token)
@@ -184,7 +202,7 @@ def reset_password(
     Reset password using the token received in email.
     """
     # Verify token specifically for password_reset scope
-    email = verify_token_scope(token, "password_reset")
+    email = verify_token_purpose(token, "password_reset")
     if not email:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -445,8 +463,10 @@ async def google_callback(
     
     # Issue JWTs
     user_id = str(user.id)
-    access_token = create_access_token(data={"sub": user_id})
-    refresh_token = create_refresh_token(data={"sub": user_id})
+    scopes = get_user_scope_string(user.is_superuser)
+
+    access_token = create_access_token(data={"sub": user_id, "scopes": scopes})
+    refresh_token = create_refresh_token(data={"sub": user_id, "scopes": scopes})
 
     # Cookie configuration
     cookie_params = {
