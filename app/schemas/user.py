@@ -45,6 +45,7 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     user_id: str | None = None
+    scopes: List[str] = []
 
 
 class UserAdminUpdate(BaseModel):

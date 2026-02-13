@@ -1,5 +1,5 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, Security, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, desc
 
@@ -17,14 +17,16 @@ def read_users(
     db: Session = Depends(get_db),
     skip: int = 0,
     limit: int = 100,
-    current_user: User = Depends(deps.get_current_superuser),
+    current_user: User = Security(deps.get_current_user, scopes=["admin"]),
 ):
     """
     Retrieve all users (Admin only).
     Supports pagination via skip/limit.
     """
+
     count_stmt = select(func.count()).select_from(User)
     total_count = db.execute(count_stmt).scalar() or 0
+
 
     stmt = (
         select(User)
@@ -41,8 +43,8 @@ def read_users(
 
 @router.get("/users/{user_id}", response_model=UserOut)
 def read_user_by_id(
-    user_id: str, # Assuming UUID is passed as string in URL
-    current_user: User = Depends(deps.get_current_superuser),
+    user_id: str, 
+    current_user: User = Security(deps.get_current_user, scopes=["admin"]),
     db: Session = Depends(get_db),
 ):
     """
@@ -61,7 +63,7 @@ def update_user_by_admin(
     user_id: str,
     user_in: UserAdminUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_superuser),
+    current_user: User = Security(deps.get_current_user, scopes=["admin"]),
 ):
     """
     Update a user's details, including status and privileges.
@@ -88,7 +90,8 @@ def update_user_by_admin(
 
     # Update attributes
     for field, value in update_data.items():
-        setattr(user, field, value)
+        if hasattr(user, field):
+            setattr(user, field, value)
 
     db.add(user)
     db.commit()
@@ -107,7 +110,7 @@ def update_user_by_admin(
 def delete_user_by_admin(
     user_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(deps.get_current_superuser),
+    current_user: User = Security(deps.get_current_user, scopes=["admin"]),
 ):
     """
     Hard delete a user from the system.
@@ -120,7 +123,7 @@ def delete_user_by_admin(
         )
     
     # Prevent admin from deleting themselves (Safety check)
-    if user.id == current_user.id:
+    if str(user.id) == str(current_user.id):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="You cannot delete your own admin account via this endpoint."

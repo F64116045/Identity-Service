@@ -1,7 +1,7 @@
 import jwt
 import redis
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import OAuth2PasswordBearer, SecurityScopes
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from sqlalchemy import select
@@ -21,10 +21,15 @@ redis_client = redis.Redis(
 )
 
 oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl=f"{settings.API_V1_STR}/auth/login"
+    tokenUrl=f"{settings.API_V1_STR}/auth/login",
+    scopes={
+        "user": "Read your own data",
+        "admin": "Admin privileges",
+    }
 )
 
 def get_current_user(
+    security_scopes: SecurityScopes,
     db: Session = Depends(get_db),
     token: str = Depends(oauth2_scheme)
 ) -> User:
@@ -52,6 +57,9 @@ def get_current_user(
         )
         
         token_sub: str | None = payload.get("sub")
+
+        token_scopes_str = payload.get("scopes", "")
+        token_scopes = token_scopes_str.split()
         
         if token_sub is None:
             logger.warning("auth.missing_sub_claim", token_preview=token[:10] + "...")
@@ -61,7 +69,7 @@ def get_current_user(
                 headers={"WWW-Authenticate": "Bearer"},
             )
             
-        token_data = TokenData(user_id=token_sub)
+        token_data = TokenData(user_id=token_sub, scopes=token_scopes)
 
     except (jwt.PyJWTError, ValidationError) as e:
         logger.warning("auth.validation_failed", error=str(e))
@@ -70,6 +78,21 @@ def get_current_user(
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    for required_scope in security_scopes.scopes:
+        if required_scope not in token_data.scopes:
+            logger.warning(
+                "auth.insufficient_scope", 
+                user_id=token_sub, 
+                required=required_scope, 
+                user_scopes=token_data.scopes
+            )
+            # 根據 OAuth2 標準，權限不足要回傳 401 並帶上所需的 scope
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Not enough permissions",
+                headers={"WWW-Authenticate": f'Bearer scope="{security_scopes.scope_str}"'},
+            )
 
 
     stmt = select(User).where(User.email == token_data.user_id)
@@ -90,23 +113,3 @@ def get_current_user(
         )
 
     return user
-
-def get_current_superuser(
-    current_user: User = Depends(get_current_user),
-) -> User:
-    """
-    Dependency to verify if the current user has superuser privileges.
-    Layered on top of `get_current_user` to ensure authentication first.
-    """
-    if not current_user.is_superuser:
-        # Log the unauthorized access attempt with context
-        logger.warning(
-            "auth.insufficient_privileges", 
-            user_id=current_user.email,
-            required_role="superuser"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="The user doesn't have enough privileges"
-        )
-    return current_user
