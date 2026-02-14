@@ -87,7 +87,6 @@ def get_current_user(
                 required=required_scope, 
                 user_scopes=token_data.scopes
             )
-            # 根據 OAuth2 標準，權限不足要回傳 401 並帶上所需的 scope
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Not enough permissions",
