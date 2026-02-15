@@ -22,6 +22,10 @@ jobs:
       POSTGRES_DB: app
       REDIS_HOST: localhost
 
+      GOOGLE_CLIENT_ID: "mock-google-client-id"
+      GOOGLE_CLIENT_SECRET: "mock-google-client-secret"
+      GOOGLE_REDIRECT_URI: "http://localhost:8000/api/v1/auth/google/callback"
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
