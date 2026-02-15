@@ -60,8 +60,8 @@ setup_metrics(app)
 app.include_router(health.router, prefix=settings.API_V1_STR, tags=["health"])
 app.include_router(auth.router, prefix=f"{settings.API_V1_STR}/auth", tags=["auth"])
 app.include_router(users.router, prefix=f"{settings.API_V1_STR}/users", tags=["users"])
-app.include_router(well_known.router, prefix="/.well-known", tags=["Discovery"])
-app.include_router(admin.router, prefix="/admin", tags=["Admin"])
+app.include_router(well_known.router, prefix=f"{settings.API_V1_STR}/.well-known", tags=["Discovery"])
+app.include_router(admin.router, prefix=f"{settings.API_V1_STR}/admin", tags=["Admin"])
 
 @app.get("/")
 async def root():
