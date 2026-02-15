@@ -9,7 +9,7 @@ from app.main import app
 from app.core.db import get_db, Base
 from app.models.user import User 
 from sqlalchemy.pool import StaticPool
-
+from app.core.limiter import limiter
 # -----------------------------------------------------------------------------
 # DATABASE SETUP
 # Use an in-memory SQLite database for fast, isolated testing.
@@ -98,3 +98,20 @@ def client(db_session: Session, mock_redis) -> Generator[TestClient, None, None]
     
     # Clean up overrides
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def disable_rate_limiter():
+    """
+    Mock the rate limiter to be disabled during tests.
+    This prevents the tests from trying to connect to a real Redis instance
+    for rate limiting, which causes ConnectionRefusedError in CI/CD.
+    """
+
+    original_enabled = limiter.enabled
+    
+    limiter.enabled = False
+    
+    yield
+    
+    limiter.enabled = original_enabled
