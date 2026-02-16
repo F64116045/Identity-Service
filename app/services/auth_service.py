@@ -13,6 +13,7 @@ from app.core.logging import logger
 from app.core.metrics import AUTH_EVENTS
 from app.models.user import User
 from app.schemas.auth import GoogleUserInfo
+import uuid
 
 # Redis Connection (Singleton logic usually managed by dependency injection, keeping simple here)
 redis_client = redis.Redis(host=settings.REDIS_HOST, port=6379, db=0, decode_responses=True)
@@ -82,15 +83,25 @@ class AuthService:
                 detail="Invalid or expired refresh token"
             )
         
-        user_id = payload.get("sub")
-        query = select(User).where(User.id == user_id)
+        user_id_str = payload.get("sub")
+        #CRITICAL FIX: SQLAlchemy + SQLite requires explicit UUID objects
+        try:
+            user_uuid = uuid.UUID(user_id_str)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token subject format"
+            )
+        query = select(User).where(User.id == user_uuid)
         user = db.execute(query).scalar_one_or_none()
         
         if not user or not user.is_active:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User no longer active")
         
         scopes = get_user_scope_string(user.is_superuser)
-        new_access_token = create_access_token(data={"sub": user_id, "scopes": scopes})
+        new_access_token = create_access_token(
+            data={"sub": str(user_uuid), "scopes": scopes} 
+        )
         
         return new_access_token
 

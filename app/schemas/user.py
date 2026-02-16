@@ -1,6 +1,6 @@
 from pydantic import BaseModel, EmailStr, ConfigDict, Field
 from typing import List
-
+import uuid
 
 class UserBase(BaseModel):
     email: EmailStr
@@ -28,7 +28,7 @@ class UserPasswordUpdate(BaseModel):
     new_password: str = Field(..., min_length=8)
 
 class UserOut(UserBase):
-    id: int
+    id: uuid.UUID
     
     model_config = ConfigDict(from_attributes=True)
 

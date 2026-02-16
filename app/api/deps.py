@@ -1,5 +1,6 @@
 import jwt
 import redis
+import uuid
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, SecurityScopes
 from pydantic import ValidationError
@@ -11,6 +12,7 @@ from app.core.db import get_db
 from app.core.logging import logger
 from app.models.user import User
 from app.schemas.user import TokenData
+from app.core.security import decode_token
 
 
 redis_client = redis.Redis(
@@ -88,13 +90,17 @@ def get_current_user(
                 user_scopes=token_data.scopes
             )
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
+                status_code=status.HTTP_403_FORBIDDEN,
                 detail="Not enough permissions",
                 headers={"WWW-Authenticate": f'Bearer scope="{security_scopes.scope_str}"'},
             )
 
+    try:
+        user_uuid = uuid.UUID(token_data.user_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=401, detail="Invalid ID format")
 
-    stmt = select(User).where(User.email == token_data.user_id)
+    stmt = select(User).where(User.id == user_uuid)
     user = db.execute(stmt).scalars().first()
 
     if not user:
@@ -112,3 +118,14 @@ def get_current_user(
         )
 
     return user
+
+
+
+def get_token_payload(token: str = Depends(oauth2_scheme)) -> dict:
+    """
+    專門給 logout 或其他只需要 payload 不需要 User 物件的 API 使用。
+    """
+    payload = decode_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return payload

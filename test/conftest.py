@@ -10,6 +10,8 @@ from app.core.db import get_db, Base
 from app.models.user import User 
 from sqlalchemy.pool import StaticPool
 from app.core.limiter import limiter
+from app.core.security import get_password_hash
+
 # -----------------------------------------------------------------------------
 # DATABASE SETUP
 # Use an in-memory SQLite database for fast, isolated testing.
@@ -115,3 +117,69 @@ def disable_rate_limiter():
     yield
     
     limiter.enabled = original_enabled
+
+@pytest.fixture
+def normal_user(db_session: Session):
+    """
+    Fixture that creates a normal user in the database before the test runs.
+    """
+    password = "password123"
+    # Important: We must hash the password before saving to DB, 
+    # because the login endpoint will hash the input and compare it.
+    hashed_password = get_password_hash(password)
+    
+    user = User(
+        email="test@example.com",
+        hashed_password=hashed_password,
+        full_name="Test User",
+        is_active=True,
+        is_superuser=False,
+    )
+    
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    
+    return user
+
+@pytest.fixture
+def admin_user(db_session: Session):
+    """
+    Create a Superuser (Admin) for RBAC testing.
+    """
+    password = "adminpassword123"
+    hashed_password = get_password_hash(password)
+    
+    user = User(
+        email="admin@example.com",
+        hashed_password=hashed_password,
+        full_name="Admin User",
+        is_active=True,
+        is_superuser=True,
+    )
+    
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    
+    return user
+
+@pytest.fixture
+def normal_user_token_headers(client: TestClient, normal_user):
+    """
+    Helper fixture to get auth headers for a normal user.
+    """
+    login_data = {"username": "test@example.com", "password": "password123"}
+    r = client.post("/api/v1/auth/login", data=login_data)
+    tokens = r.json()
+    return {"Authorization": f"Bearer {tokens['access_token']}"}
+
+@pytest.fixture
+def admin_user_token_headers(client: TestClient, admin_user):
+    """
+    Helper fixture to get auth headers for an admin user.
+    """
+    login_data = {"username": "admin@example.com", "password": "adminpassword123"}
+    r = client.post("/api/v1/auth/login", data=login_data)
+    tokens = r.json()
+    return {"Authorization": f"Bearer {tokens['access_token']}"}

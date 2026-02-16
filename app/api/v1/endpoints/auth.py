@@ -23,10 +23,11 @@ from app.core.limiter import limiter
 from app.core.logging import logger
 from app.core.metrics import AUTH_EVENTS
 from app.schemas.user import UserPasswordUpdate
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_token_payload
 
 from app.services.auth_service import AuthService
 from app.services.google_service import GoogleService
+
 
 router = APIRouter()
 
@@ -83,7 +84,7 @@ def refresh_token(
     return {"access_token": new_access_token, "token_type": "bearer"}
 
 @router.post("/logout")
-def logout(request: Request, response: Response, token: dict = Depends(decode_token)):
+def logout(request: Request, response: Response, token: dict = Depends(get_token_payload)):
     """
     Logout: Clear cookie and blacklist access token.
     """
