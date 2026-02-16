@@ -66,13 +66,14 @@ def mock_redis():
         # Configure the mock to return specific values if needed
         mock_client.get.return_value = None
         mock_client.setex.return_value = True
+        mock_client.exists.return_value = False
         
         # PATCH TARGET: 
         # You must patch the 'redis_client' where it is USED/IMPORTED, 
         # not where it is defined.
         # Assuming your AuthService is in app.services.auth_service
         m.setattr("app.services.auth_service.redis_client", mock_client)
-        
+        m.setattr("app.api.deps.redis_client", mock_client)
         # Also patch the router's redis_client if it's still being used there directly
         # m.setattr("app.api.v1.endpoints.auth.redis_client", mock_client)
         
